@@ -1,16 +1,30 @@
-# React + Vite
+# LateResponse44
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A sleek, modern web application designed to streamline the generation of incident report presentations. Built with React and client-side PPTX processing.
 
-Currently, two official plugins are available:
+## Technologies Used
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+This application uses a modern, lightweight technology stack to deliver fast performance and a premium user experience without requiring a heavy backend.
 
-## React Compiler
+### Core Framework & Build
+*   **[React](https://react.dev/)**: Component-based UI library for a dynamic and responsive interface.
+*   **[Vite](https://vitejs.dev/)**: Next-generation frontend tooling for lightning-fast development and optimized production builds.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Styling & Design
+*   **Vanilla CSS**: Custom-architected CSS using native modern features:
+    *   CSS Variables for consistent theming.
+    *   Flexbox & Grid for responsive layouts.
+    *   Glassmorphism effects for a premium "dark mode" aesthetic.
+    *   Animations for smooth interactions.
 
-## Expanding the ESLint configuration
+### PowerPoint Generation
+*   **[JSZip](https://stuk.github.io/jszip/)**: Client-side creation and manipulation of ZIP archives (the underlying format of `.pptx` files).
+*   **[FileSaver.js](https://github.com/eligrey/FileSaver.js/)**: Handles the client-side saving of the generated presentation files.
+*   **XML Manipulation**: Custom logic to parse and update the internal XML structure of PowerPoint templates for precise text and image replacement.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Features
+
+*   **Smart Form**: Auto-formats times (`HH:mm:ss`) and durations (`xx Min xx Sec`).
+*   **Auto-Calculations**: Automatically computes Real Response Time, Time Exceeded, and SFTL Durations.
+*   **Image Replacement**: Intelligent mapping of user-uploaded images to specific placeholders within the template.
+*   **Instant Generation**: Generates reports locally in the browser with zero latency.
