@@ -1,6 +1,9 @@
 # LateResponse44
 
-A sleek, modern web application designed to streamline the generation of incident report presentations. Built with React and client-side PPTX processing.
+A sleek, modern web application designed to streamline the generation of incident report presentations for frontliners. Built with React and client-side PPTX processing.
+
+## What is Late Response?
+A response is considered late by SCDF when SCDF vehicles are unable to reach the incident location within 8 minutes. Section Commanders or Vehicles ICs must create a powerpoint presentation to justify their late response.
 
 ## Technologies Used
 
