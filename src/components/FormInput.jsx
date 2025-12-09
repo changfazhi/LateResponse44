@@ -1,6 +1,6 @@
 import React from 'react';
 
-const FormInput = ({ label, name, type = 'text', value, onChange, required = false, placeholder = '' }) => {
+const FormInput = ({ label, name, type = 'text', value, onChange, required = false, placeholder = '', ...props }) => {
     return (
         <div style={{ marginBottom: '1.5rem' }}>
             <label
@@ -42,6 +42,7 @@ const FormInput = ({ label, name, type = 'text', value, onChange, required = fal
                     e.target.style.borderColor = 'var(--border-color)';
                     e.target.style.boxShadow = 'none';
                 }}
+                {...props}
             />
         </div>
     );

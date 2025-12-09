@@ -182,14 +182,24 @@ const Form = () => {
         if (responseInputSec !== null) processedData.response_time = formatSecondsToVerbose(responseInputSec);
         if (actualActivationInputSec !== null) processedData.actual_activation_time = formatSecondsToVerbose(actualActivationInputSec);
 
-        // Format SFTL durations
-        const sftl1Sec = parseDurationToSeconds(processedData.SFTL1_duration);
-        const sftl2Sec = parseDurationToSeconds(processedData.SFTL2_duration);
-        const sftl3Sec = parseDurationToSeconds(processedData.SFTL3_duration);
+        // User Request: SFTL Duration = SFTL Green - SFTL Red
+        const sftl1RedSec = parseTimeToSeconds(processedData.SFTL1_redTime);
+        const sftl1GreenSec = parseTimeToSeconds(processedData.SFTL1_greenTime);
+        if (sftl1RedSec !== null && sftl1GreenSec !== null) {
+            processedData.SFTL1_duration = formatSecondsToVerbose(sftl1GreenSec - sftl1RedSec);
+        }
 
-        if (sftl1Sec !== null) processedData.SFTL1_duration = formatSecondsToVerbose(sftl1Sec);
-        if (sftl2Sec !== null) processedData.SFTL2_duration = formatSecondsToVerbose(sftl2Sec);
-        if (sftl3Sec !== null) processedData.SFTL3_duration = formatSecondsToVerbose(sftl3Sec);
+        const sftl2RedSec = parseTimeToSeconds(processedData.SFTL2_redTime);
+        const sftl2GreenSec = parseTimeToSeconds(processedData.SFTL2_greenTime);
+        if (sftl2RedSec !== null && sftl2GreenSec !== null) {
+            processedData.SFTL2_duration = formatSecondsToVerbose(sftl2GreenSec - sftl2RedSec);
+        }
+
+        const sftl3RedSec = parseTimeToSeconds(processedData.SFTL3_redTime);
+        const sftl3GreenSec = parseTimeToSeconds(processedData.SFTL3_greenTime);
+        if (sftl3RedSec !== null && sftl3GreenSec !== null) {
+            processedData.SFTL3_duration = formatSecondsToVerbose(sftl3GreenSec - sftl3RedSec);
+        }
 
 
         try {
@@ -255,7 +265,6 @@ const Form = () => {
 
             {/* Image Uploads */}
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Evidence Images</h3>
-            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>Upload images to replace template placeholders.</p>
 
             {/* Slide 1 & 2 */}
             <h4 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '1rem' }}>General Images</h4>
@@ -336,7 +345,6 @@ const Form = () => {
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 1 Metrics</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <FormInput label="SFTL1 Location" name="sftl1" value={formData.sftl1} onChange={handleChange} />
-                <FormInput label="SFTL1 Duration" name="SFTL1_duration" value={formData.SFTL1_duration} onChange={handleChange} placeholder="MM:SS" />
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <FormInput label="SFTL1 Red Time" name="SFTL1_redTime" type="time" step="1" value={formData.SFTL1_redTime} onChange={handleChange} />
@@ -346,7 +354,6 @@ const Form = () => {
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 2 Metrics</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <FormInput label="SFTL2 Location" name="sftl2" value={formData.sftl2} onChange={handleChange} />
-                <FormInput label="SFTL2 Duration" name="SFTL2_duration" value={formData.SFTL2_duration} onChange={handleChange} placeholder="MM:SS" />
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <FormInput label="SFTL2 Red Time" name="SFTL2_redTime" type="time" step="1" value={formData.SFTL2_redTime} onChange={handleChange} />
@@ -356,7 +363,6 @@ const Form = () => {
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 3 Metrics</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <FormInput label="SFTL3 Location" name="sftl3" value={formData.sftl3} onChange={handleChange} />
-                <FormInput label="SFTL3 Duration" name="SFTL3_duration" value={formData.SFTL3_duration} onChange={handleChange} placeholder="MM:SS" />
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                 <FormInput label="SFTL3 Red Time" name="SFTL3_redTime" type="time" step="1" value={formData.SFTL3_redTime} onChange={handleChange} />
