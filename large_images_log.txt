@@ -1,0 +1,7 @@
+Found Large Image: Slide: ppt/slides/slide1.xml, Name: Google Shape;243;p27, Width: 9589500, Height: 3154441
+Found Large Image: Slide: ppt/slides/slide2.xml, Name: Google Shape;271;p28, Width: 3788400, Height: 2399475
+Found Large Image: Slide: ppt/slides/slide3.xml, Name: Google Shape;296;p29, Width: 1961375, Height: 1295075
+Found Large Image: Slide: ppt/slides/slide3.xml, Name: Google Shape;297;p29, Width: 1554300, Height: 1237200
+Found Large Image: Slide: ppt/slides/slide3.xml, Name: Google Shape;298;p29, Width: 1614275, Height: 1193175
+Found Large Image: Slide: ppt/slides/slide3.xml, Name: Google Shape;299;p29, Width: 1684875, Height: 1237200
+Found Large Image: Slide: ppt/slides/slide3.xml, Name: Google Shape;300;p29, Width: 1554300, Height: 1193150
