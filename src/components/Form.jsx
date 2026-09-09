@@ -1,76 +1,22 @@
 import React, { useState } from 'react';
 import FormInput from './FormInput';
-import { generatePPTX, UPLOAD_SLOTS } from '../utils/pptxGenerator';
-
-// Clock-time and duration fields, paired with the label shown on the form so a
-// validation message points at the box the user has to go and fix.
-const TIME_FIELDS = [
-    ['time', 'Incident Time'],
-    ['arrival_time', 'Arrival Time'],
-    ['move_off', 'Move Off Time'],
-    ['SFTL1_redTime', 'SFTL1 Red Time'],
-    ['SFTL1_greenTime', 'SFTL1 Green Time'],
-    ['SFTL2_redTime', 'SFTL2 Red Time'],
-    ['SFTL2_greenTime', 'SFTL2 Green Time'],
-    ['SFTL3_redTime', 'SFTL3 Red Time'],
-    ['SFTL3_greenTime', 'SFTL3 Green Time'],
-];
-
-const DURATION_FIELDS = [
-    ['activation_time', 'Activation Time'],
-    ['actual_activation_time', 'Actual Activation'],
-    ['response_time', 'Response Time (Input)'],
-];
-
-// Every placeholder the template actually prints, so we can tell the user which
-// ones will come out blank instead of letting them find out in the deck.
-const REPORT_FIELDS = [
-    ['incident_number', 'Incident Number'],
-    ['date', 'Date'],
-    ['time', 'Incident Time'],
-    ['arrival_time', 'Arrival Time'],
-    ['move_off', 'Move Off Time'],
-    ['response_time', 'Response Time'],
-    ['real_response_time', 'Real Response Time'],
-    ['actual_response_time', 'Actual Response Time'],
-    ['activation_time', 'Activation Time'],
-    ['actual_activation_time', 'Actual Activation'],
-    ['time_exceeded', 'Time Exceeded'],
-    ['y_n', 'Activation within 1 minute'],
-    ['incident_type', 'Incident Type'],
-    ['location', 'Location'],
-    ['appliance_data', 'Appliance Data'],
-    ['response_zone', 'Response Zone'],
-    ['number_of_sftl', 'Number of SFTL'],
-    ['sc', 'SC'],
-    ['po', 'PO'],
-    ['sftl1', 'SFTL1 Location'],
-    ['SFTL1_redTime', 'SFTL1 Red Time'],
-    ['SFTL1_greenTime', 'SFTL1 Green Time'],
-    ['SFTL1_duration', 'SFTL1 Duration'],
-    ['sftl2', 'SFTL2 Location'],
-    ['SFTL2_redTime', 'SFTL2 Red Time'],
-    ['SFTL2_greenTime', 'SFTL2 Green Time'],
-    ['SFTL2_duration', 'SFTL2 Duration'],
-    ['sftl3', 'SFTL3 Location'],
-    ['SFTL3_redTime', 'SFTL3 Red Time'],
-    ['SFTL3_greenTime', 'SFTL3 Green Time'],
-    ['SFTL3_duration', 'SFTL3 Duration'],
-];
-
-// SCDF treats a response as late beyond 8 minutes; Time Exceeded is measured
-// against that threshold. It is the one policy number in the app, so it lives
-// here rather than inline in a calculation.
-const LATE_THRESHOLD_SECONDS = 8 * 60;
-
-// toISOString() reports the UTC date, which is the previous day for the whole
-// 00:00-08:00 local window here — disproportionately the hours this tool is
-// used for. Build the default from local calendar fields instead.
-const todayLocalISO = () => {
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-};
+import ExtractionPanel from '../features/extraction/ExtractionPanel';
+import {
+    DURATION_FIELDS,
+    REPORT_FIELDS,
+    TIME_FIELDS,
+    modePrintsField,
+} from '../domain/reportFields';
+import {
+    LATE_THRESHOLD_SECONDS,
+    elapsedBetween,
+    formatSecondsToVerbose,
+    formatTimeSeconds,
+    parseDurationToSeconds,
+    parseTimeToSeconds,
+    todayLocalISO,
+} from '../domain/time';
+import { generatePPTX, REPORT_MODES, uploadSlotsFor, ALL_UPLOAD_SLOTS } from '../utils/pptxGenerator';
 
 const STATUS_STYLES = {
     error: { bg: 'rgba(239, 68, 68, 0.2)', fg: '#fca5a5', border: 'rgba(239, 68, 68, 0.5)' },
@@ -113,26 +59,31 @@ const Form = () => {
         SFTL3_redTime: '',
     });
 
-    // Separate state for images
-    const [images, setImages] = useState({
-        googleMapPic: null,
-        acesPic: null,
-        moveOffPic: null,
-        sftl1RedPic: null,
-        sftl1GreenPic: null,
-        sftl2RedPic: null,
-        sftl2GreenPic: null,
-        sftl3RedPic: null,
-        sftl3GreenPic: null,
-        arrivalPic: null
-    });
+    // Separate state for images, keyed by every slot any report type can use so an
+    // upload survives a mode switch that hides it.
+    const [images, setImages] = useState(() =>
+        Object.fromEntries(ALL_UPLOAD_SLOTS.map(slot => [slot.key, null]))
+    );
+
+    const [mode, setMode] = useState('late_response');
 
     const [isLoading, setIsLoading] = useState(false);
     const [status, setStatus] = useState(null);
 
+    // Fields the operator accepted from extracted notes, so each input can show
+    // where its value came from until it is edited by hand.
+    const [extractedFields, setExtractedFields] = useState(() => new Set());
+
     const handleChange = (e) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
+        // Typed over: it is the operator's value now, so drop the badge.
+        setExtractedFields(prev => {
+            if (!prev.has(name)) return prev;
+            const next = new Set(prev);
+            next.delete(name);
+            return next;
+        });
         if (status) setStatus(null);
     };
 
@@ -144,90 +95,49 @@ const Form = () => {
         }
     };
 
-    const SECONDS_PER_DAY = 24 * 3600;
-
-    // Split "HH:mm[:ss]" into numeric parts, or null if a part is empty or not a
-    // number. Returning null rather than NaN is what lets the callers below tell
-    // "no value given" apart from "a value we can safely calculate with" — every
-    // guard down there is a !== null check, and NaN passes those.
-    const splitTimeParts = (str, maxParts) => {
-        const parts = str.split(':');
-        if (parts.length < 2 || parts.length > maxParts) return null;
-        if (parts.some(part => part.trim() === '')) return null;
-        const nums = parts.map(Number);
-        if (nums.some(n => !Number.isFinite(n))) return null;
-        return nums;
-    };
-
-    // Helper: Parse HH:mm:ss to seconds from start of day
-    const parseTimeToSeconds = (timeStr) => {
-        if (!timeStr) return null;
-        const parts = splitTimeParts(timeStr.trim(), 3);
-        if (!parts) return null;
-        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-        return parts[0] * 3600 + parts[1] * 60;
-    };
-
-    // Helper: Parse Duration to seconds. Supports MM:SS or plain minutes.
-    const parseDurationToSeconds = (durStr) => {
-        if (!durStr) return null;
-        const str = durStr.trim();
-        if (!str) return null;
-        if (str.includes(':')) {
-            const parts = splitTimeParts(str, 3);
-            if (!parts) return null;
-            if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-            return parts[0] * 60 + parts[1];
-        }
-        // A bare number is ambiguous: someone writing "90" for 90 seconds would
-        // silently get 90 minutes. The form asks for MM:SS, so require it and let
-        // validation say so rather than guessing at a 10x error.
-        return null;
-    };
-
-    // Elapsed time between two clock times, wrapping over midnight so an incident
-    // that moves off at 23:58 and arrives at 00:05 reads as 7 minutes rather than
-    // as a negative duration.
-    const elapsedBetween = (fromSec, toSec) => {
-        const diff = toSec - fromSec;
-        return diff < 0 ? diff + SECONDS_PER_DAY : diff;
-    };
-
-    // Helper: Format seconds to "xx Min xx Sec" (Verbose Duration)
-    const formatSecondsToVerbose = (totalSeconds) => {
-        const isNegative = totalSeconds < 0;
-        const absSeconds = Math.abs(totalSeconds);
-        const m = Math.floor(absSeconds / 60);
-        const s = Math.floor(absSeconds % 60);
-        // User asked for "xx Min xx Sec". 8 mins = "08 Min 00 Sec"? or "8 Min 0 Sec"?
-        // Template usually looks better with padding. I'll pad.
-        const formatted = `${String(m).padStart(2, '0')} Min ${String(s).padStart(2, '0')} Sec`;
-        return isNegative ? `-${formatted}` : formatted;
-    };
-
-    const formatTimeSeconds = (timeStr) => {
-        if (!timeStr) return '';
-        if (timeStr.length === 5) return `${timeStr}:00`;
-        return timeStr;
+    // The one place extraction is allowed to touch the report. It fills inputs
+    // and nothing else: no validation is skipped, no derived value is carried
+    // over, and the operator still has to press Download Presentation.
+    const applyProposals = (patch) => {
+        setFormData(prev => ({ ...prev, ...patch }));
+        setExtractedFields(prev => new Set([...prev, ...Object.keys(patch)]));
+        if (status) setStatus(null);
     };
 
     // Refuse to build a report we know would be wrong. Two things are blocking:
     // a value that was typed but cannot be parsed, and a half-filled pair that
     // leaves a calculation impossible. Everything merely left blank is reported
     // afterwards as a warning, since a partial draft is a legitimate thing to want.
-    const findBlockingProblems = (data) => {
+    const findBlockingProblems = (data, reportMode) => {
         const problems = [];
+        const prints = (key) => modePrintsField(reportMode, key);
 
         for (const [key, label] of TIME_FIELDS) {
+            if (!prints(key)) continue;
             if (data[key] && parseTimeToSeconds(data[key]) === null) {
                 problems.push(`${label}: "${data[key]}" is not a valid time. Use HH:mm or HH:mm:ss.`);
             }
         }
 
         for (const [key, label] of DURATION_FIELDS) {
+            if (!prints(key)) continue;
             if (data[key] && parseDurationToSeconds(data[key]) === null) {
                 problems.push(`${label}: "${data[key]}" is not a valid duration. Use MM:SS, for example 05:30.`);
             }
+        }
+
+        // The late activation slide carries fixed wording the form cannot rewrite:
+        // "According to ACES logs, <appliance> responded within 1 Min." An Actual
+        // Activation of a minute or more makes the slide contradict its own table,
+        // which on an official document is worse than producing nothing at all.
+        if (reportMode === 'late_activation') {
+            const actualActivationSec = parseDurationToSeconds(data.actual_activation_time);
+            if (actualActivationSec !== null && actualActivationSec >= 60) {
+                problems.push(`The slide states the appliance activated within 1 minute, but Actual Activation is "${data.actual_activation_time}". Correct the figure, or this is not a late-activation justification.`);
+            }
+            // Every rule below is about the response, which this report makes no
+            // claim about — they are what used to block a late activation report.
+            return problems;
         }
 
         const filled = (key) => Boolean(data[key]);
@@ -259,10 +169,13 @@ const Form = () => {
         return formatSecondsToVerbose(responseSec - LATE_THRESHOLD_SECONDS);
     })();
 
+    const isLateResponse = mode === 'late_response';
+    const uploadSlots = uploadSlotsFor(mode);
+
     const handleSubmit = async (e) => {
         e.preventDefault();
 
-        const problems = findBlockingProblems(formData);
+        const problems = findBlockingProblems(formData, mode);
         if (problems.length > 0) {
             setStatus({ type: 'error', message: 'The report was not generated. Fix these first:', details: problems });
             return;
@@ -350,17 +263,26 @@ const Form = () => {
 
 
         try {
-            await generatePPTX(processedData, images);
+            await generatePPTX(processedData, images, mode);
 
-            const blankFields = REPORT_FIELDS.filter(([key]) => !processedData[key]).map(([, label]) => label);
-            const missingImages = UPLOAD_SLOTS.filter(slot => !images[slot.key]).map(slot => slot.label);
+            const modeSlots = uploadSlotsFor(mode);
+            const blankFields = REPORT_FIELDS
+                .filter(([key]) => modePrintsField(mode, key) && !processedData[key])
+                .map(([, label]) => label);
+            const missingImages = modeSlots.filter(slot => !images[slot.key]).map(slot => slot.label);
 
             const details = [];
+
+            // Not blocking: ACES having already logged the activation as under a
+            // minute does not make the deck wrong, it makes it pointless.
+            if (mode === 'late_activation' && activationSec !== null && activationSec < 60) {
+                details.push('ACES logged this activation as within 1 minute, so there is nothing here to justify. Check the Activation Time.');
+            }
             if (blankFields.length > 0) {
                 details.push(`${blankFields.length} field${blankFields.length === 1 ? '' : 's'} printed blank: ${blankFields.join(', ')}.`);
             }
             if (missingImages.length > 0) {
-                details.push(`${missingImages.length} of ${UPLOAD_SLOTS.length} evidence images not uploaded, so the template's placeholder graphics remain: ${missingImages.join(', ')}.`);
+                details.push(`${missingImages.length} of ${modeSlots.length} evidence images not uploaded, so the template's placeholder graphics remain: ${missingImages.join(', ')}.`);
             }
 
             setStatus(details.length > 0
@@ -376,158 +298,157 @@ const Form = () => {
 
     return (
         <form onSubmit={handleSubmit} className="glass-panel animate-fade-in" style={{ width: '100%' }}>
-            <h2 style={{ textAlign: 'center', marginBottom: '2rem' }}>Incident Data Entry</h2>
+            <h2 style={{ textAlign: 'center', marginBottom: '1.5rem' }}>Incident Data Entry</h2>
+
+            {/* Report type. The two documents justify different things, so each one
+                shows only the fields its own slides print. */}
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '2rem' }}>
+                {Object.entries(REPORT_MODES).map(([key, reportMode]) => (
+                    <button
+                        key={key}
+                        type="button"
+                        onClick={() => { setMode(key); setStatus(null); }}
+                        aria-pressed={mode === key}
+                        style={{
+                            flex: 1,
+                            padding: '0.75rem 1rem',
+                            borderRadius: 'var(--radius-md)',
+                            cursor: 'pointer',
+                            fontSize: '1rem',
+                            fontWeight: '500',
+                            backgroundColor: mode === key ? 'var(--accent-primary)' : 'var(--input-bg)',
+                            color: mode === key ? '#fff' : 'var(--text-secondary)',
+                            border: `1px solid ${mode === key ? 'var(--accent-primary)' : 'var(--border-color)'}`
+                        }}
+                    >
+                        {reportMode.label}
+                    </button>
+                ))}
+            </div>
+
+            <ExtractionPanel
+                mode={mode}
+                formData={formData}
+                onApply={applyProposals}
+            />
 
             {/* Incident Identification */}
             <h3 style={{ marginBottom: '1rem', color: 'var(--accent-primary)' }}>Identification</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Incident Number" name="incident_number" value={formData.incident_number} onChange={handleChange} required placeholder="eg. /YYYYMMDD/XXXX" />
-                <FormInput label="Date" name="date" type="date" value={formData.date} onChange={handleChange} required />
+                <FormInput label="Incident Number" name="incident_number" fromNotes={extractedFields.has('incident_number')} value={formData.incident_number} onChange={handleChange} required placeholder="eg. /YYYYMMDD/XXXX" />
+                {isLateResponse && <FormInput label="Date" name="date" fromNotes={extractedFields.has('date')} type="date" value={formData.date} onChange={handleChange} required />}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Incident Type" name="incident_type" value={formData.incident_type} onChange={handleChange} />
-                <FormInput label="Location" name="location" value={formData.location} onChange={handleChange} />
-            </div>
+            {isLateResponse && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                    <FormInput label="Incident Type" name="incident_type" fromNotes={extractedFields.has('incident_type')} value={formData.incident_type} onChange={handleChange} />
+                    <FormInput label="Location" name="location" fromNotes={extractedFields.has('location')} value={formData.location} onChange={handleChange} />
+                </div>
+            )}
 
             {/* Time Data (HH:mm:ss) - Clock Times */}
-            <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Timing (Clock Time)</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Incident Time" name="time" type="time" step="1" value={formData.time} onChange={handleChange} />
-                <FormInput label="Arrival Time" name="arrival_time" type="time" step="1" value={formData.arrival_time} onChange={handleChange} />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Move Off Time" name="move_off" type="time" step="1" value={formData.move_off} onChange={handleChange} />
-            </div>
+            {isLateResponse && (
+                <>
+                    <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Timing (Clock Time)</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="Incident Time" name="time" fromNotes={extractedFields.has('time')} type="time" step="1" value={formData.time} onChange={handleChange} />
+                        <FormInput label="Arrival Time" name="arrival_time" fromNotes={extractedFields.has('arrival_time')} type="time" step="1" value={formData.arrival_time} onChange={handleChange} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="Move Off Time" name="move_off" fromNotes={extractedFields.has('move_off')} type="time" step="1" value={formData.move_off} onChange={handleChange} />
+                    </div>
+                </>
+            )}
 
             {/* Durations */}
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Durations (MM:SS)</h3>
             <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>Enter as 05:30. Output will be formatted as "xx Min xx Sec".</p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Activation Time" name="activation_time" value={formData.activation_time} onChange={handleChange} placeholder="05:30" />
-                <FormInput label="Actual Activation" name="actual_activation_time" value={formData.actual_activation_time} onChange={handleChange} placeholder="05:30" />
+                <FormInput label="Activation Time" name="activation_time" fromNotes={extractedFields.has('activation_time')} value={formData.activation_time} onChange={handleChange} placeholder="05:30" />
+                <FormInput label="Actual Activation" name="actual_activation_time" fromNotes={extractedFields.has('actual_activation_time')} value={formData.actual_activation_time} onChange={handleChange} placeholder="05:30" />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Response Time (Input)" name="response_time" value={formData.response_time} onChange={handleChange} placeholder="10:00" />
-            </div>
+            {isLateResponse && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                    <FormInput label="Response Time (Input)" name="response_time" fromNotes={extractedFields.has('response_time')} value={formData.response_time} onChange={handleChange} placeholder="10:00" />
+                </div>
+            )}
 
             {/* Other Metrics */}
-            <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Metrics</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Time Exceeded (Auto Calc)" name="time_exceeded" value={timeExceededPreview} readOnly placeholder="From Response Time" />
-                <div style={{ marginBottom: '1.5rem' }}>
-                    <label htmlFor="y_n" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>Activation within 1 minute?</label>
-                    <select name="y_n" id="y_n" value={formData.y_n} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', backgroundColor: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: '1rem', outline: 'none', cursor: 'pointer' }}>
-                        <option value="Y">Yes</option>
-                        <option value="N">No</option>
-                    </select>
-                </div>
-            </div>
+            {isLateResponse && (
+                <>
+                    <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Metrics</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="Time Exceeded (Auto Calc)" name="time_exceeded" fromNotes={extractedFields.has('time_exceeded')} value={timeExceededPreview} readOnly placeholder="From Response Time" />
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <label htmlFor="y_n" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>Activation within 1 minute?</label>
+                            <select name="y_n" id="y_n" value={formData.y_n} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', backgroundColor: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: '1rem', outline: 'none', cursor: 'pointer' }}>
+                                <option value="Y">Yes</option>
+                                <option value="N">No</option>
+                            </select>
+                        </div>
+                    </div>
+                </>
+            )}
 
-            {/* Image Uploads */}
+            {/* Image Uploads, rendered from this report type's slot list so the
+                labels here, the frames they land in and the "not uploaded" warning
+                cannot drift apart. */}
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Evidence Images</h3>
-
-            {/* Slide 1 & 2 */}
-            <h4 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '1rem' }}>General Images</h4>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.5rem' }}>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>Google Map Picture</label>
-                    <input type="file" name="googleMapPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>ACES Picture</label>
-                    <input type="file" name="acesPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
+                {uploadSlots.map(slot => (
+                    <div key={slot.key}>
+                        <label htmlFor={slot.key} style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>{slot.label}</label>
+                        <input type="file" id={slot.key} name={slot.key} onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
+                    </div>
+                ))}
             </div>
-
-            {/* Slide 3 - Sequence */}
-            <h4 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '1rem' }}>Sequence Images</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1rem' }}>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>Move Off Picture</label>
-                    <input type="file" name="moveOffPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>Arrival Picture</label>
-                    <input type="file" name="arrivalPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-            </div>
-
-            <h4 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', marginTop: '1rem' }}>SFTL 1</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>SFTL1 Red</label>
-                    <input type="file" name="sftl1RedPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>SFTL1 Green</label>
-                    <input type="file" name="sftl1GreenPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-            </div>
-
-            <h4 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', marginTop: '1rem' }}>SFTL 2</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>SFTL2 Red</label>
-                    <input type="file" name="sftl2RedPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>SFTL2 Green</label>
-                    <input type="file" name="sftl2GreenPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-            </div>
-
-            <h4 style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', marginTop: '1rem' }}>SFTL 3</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>SFTL3 Red</label>
-                    <input type="file" name="sftl3RedPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>SFTL3 Green</label>
-                    <input type="file" name="sftl3GreenPic" onChange={handleImageChange} accept="image/*" style={{ color: 'var(--text-primary)' }} />
-                </div>
-            </div>
-
 
             {/* Operational Details */}
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Operational Details</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Appliance Data" name="appliance_data" value={formData.appliance_data} onChange={handleChange} />
-                <FormInput label="Response Zone" name="response_zone" value={formData.response_zone} onChange={handleChange} />
+                <FormInput label="Appliance Data" name="appliance_data" fromNotes={extractedFields.has('appliance_data')} value={formData.appliance_data} onChange={handleChange} />
+                {isLateResponse && <FormInput label="Response Zone" name="response_zone" fromNotes={extractedFields.has('response_zone')} value={formData.response_zone} onChange={handleChange} />}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="Number of SFTL" name="number_of_sftl" value={formData.number_of_sftl} onChange={handleChange} />
-                <FormInput label="SC" name="sc" value={formData.sc} onChange={handleChange} placeholder="eg. SGT1 Fa Zhi" />
-            </div>
-            <FormInput label="PO" name="po" value={formData.po} onChange={handleChange} placeholder="eg. SGT1 Fa Zhi" />
+            {isLateResponse && (
+                <>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="Number of SFTL" name="number_of_sftl" fromNotes={extractedFields.has('number_of_sftl')} value={formData.number_of_sftl} onChange={handleChange} />
+                        <FormInput label="SC" name="sc" fromNotes={extractedFields.has('sc')} value={formData.sc} onChange={handleChange} placeholder="eg. SGT1 Fa Zhi" />
+                    </div>
+                    <FormInput label="PO" name="po" fromNotes={extractedFields.has('po')} value={formData.po} onChange={handleChange} placeholder="eg. SGT1 Fa Zhi" />
+                </>
+            )}
 
             {/* SFTL Data */}
-            <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 1 Metrics</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="SFTL1 Location" name="sftl1" value={formData.sftl1} onChange={handleChange} />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="SFTL1 Red Time" name="SFTL1_redTime" type="time" step="1" value={formData.SFTL1_redTime} onChange={handleChange} />
-                <FormInput label="SFTL1 Green Time" name="SFTL1_greenTime" type="time" step="1" value={formData.SFTL1_greenTime} onChange={handleChange} />
-            </div>
+            {isLateResponse && (
+                <>
+                    <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 1 Metrics</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="SFTL1 Location" name="sftl1" fromNotes={extractedFields.has('sftl1')} value={formData.sftl1} onChange={handleChange} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="SFTL1 Red Time" name="SFTL1_redTime" fromNotes={extractedFields.has('SFTL1_redTime')} type="time" step="1" value={formData.SFTL1_redTime} onChange={handleChange} />
+                        <FormInput label="SFTL1 Green Time" name="SFTL1_greenTime" fromNotes={extractedFields.has('SFTL1_greenTime')} type="time" step="1" value={formData.SFTL1_greenTime} onChange={handleChange} />
+                    </div>
 
-            <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 2 Metrics</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="SFTL2 Location" name="sftl2" value={formData.sftl2} onChange={handleChange} />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="SFTL2 Red Time" name="SFTL2_redTime" type="time" step="1" value={formData.SFTL2_redTime} onChange={handleChange} />
-                <FormInput label="SFTL2 Green Time" name="SFTL2_greenTime" type="time" step="1" value={formData.SFTL2_greenTime} onChange={handleChange} />
-            </div>
+                    <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 2 Metrics</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="SFTL2 Location" name="sftl2" fromNotes={extractedFields.has('sftl2')} value={formData.sftl2} onChange={handleChange} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="SFTL2 Red Time" name="SFTL2_redTime" fromNotes={extractedFields.has('SFTL2_redTime')} type="time" step="1" value={formData.SFTL2_redTime} onChange={handleChange} />
+                        <FormInput label="SFTL2 Green Time" name="SFTL2_greenTime" fromNotes={extractedFields.has('SFTL2_greenTime')} type="time" step="1" value={formData.SFTL2_greenTime} onChange={handleChange} />
+                    </div>
 
-            <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 3 Metrics</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="SFTL3 Location" name="sftl3" value={formData.sftl3} onChange={handleChange} />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                <FormInput label="SFTL3 Red Time" name="SFTL3_redTime" type="time" step="1" value={formData.SFTL3_redTime} onChange={handleChange} />
-                <FormInput label="SFTL3 Green Time" name="SFTL3_greenTime" type="time" step="1" value={formData.SFTL3_greenTime} onChange={handleChange} />
-            </div>
+                    <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>SFTL 3 Metrics</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="SFTL3 Location" name="sftl3" fromNotes={extractedFields.has('sftl3')} value={formData.sftl3} onChange={handleChange} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                        <FormInput label="SFTL3 Red Time" name="SFTL3_redTime" fromNotes={extractedFields.has('SFTL3_redTime')} type="time" step="1" value={formData.SFTL3_redTime} onChange={handleChange} />
+                        <FormInput label="SFTL3 Green Time" name="SFTL3_greenTime" fromNotes={extractedFields.has('SFTL3_greenTime')} type="time" step="1" value={formData.SFTL3_greenTime} onChange={handleChange} />
+                    </div>
+                </>
+            )}
 
             {status && (
                 <div style={{
