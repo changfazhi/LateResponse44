@@ -30,3 +30,8 @@ large_images_log.txt
 # Scratch copies of the template, extracted for inspection
 temp_img_pptx/
 *.pptx.zip
+
+# Local env files — never commit a real API key
+.env
+.env.*
+!.env.example
