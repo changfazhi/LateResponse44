@@ -58,6 +58,20 @@ const REPORT_FIELDS = [
     ['SFTL3_duration', 'SFTL3 Duration'],
 ];
 
+// SCDF treats a response as late beyond 8 minutes; Time Exceeded is measured
+// against that threshold. It is the one policy number in the app, so it lives
+// here rather than inline in a calculation.
+const LATE_THRESHOLD_SECONDS = 8 * 60;
+
+// toISOString() reports the UTC date, which is the previous day for the whole
+// 00:00-08:00 local window here — disproportionately the hours this tool is
+// used for. Build the default from local calendar fields instead.
+const todayLocalISO = () => {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+};
+
 const STATUS_STYLES = {
     error: { bg: 'rgba(239, 68, 68, 0.2)', fg: '#fca5a5', border: 'rgba(239, 68, 68, 0.5)' },
     warning: { bg: 'rgba(245, 158, 11, 0.2)', fg: '#fcd34d', border: 'rgba(245, 158, 11, 0.5)' },
@@ -67,7 +81,7 @@ const STATUS_STYLES = {
 const Form = () => {
     const [formData, setFormData] = useState({
         incident_number: '',
-        date: new Date().toISOString().split('T')[0],
+        date: todayLocalISO(),
         time: '',
         arrival_time: '',
         response_time: '',
@@ -165,7 +179,9 @@ const Form = () => {
             if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
             return parts[0] * 60 + parts[1];
         }
-        if (!isNaN(str)) return Number(str) * 60;
+        // A bare number is ambiguous: someone writing "90" for 90 seconds would
+        // silently get 90 minutes. The form asks for MM:SS, so require it and let
+        // validation say so rather than guessing at a 10x error.
         return null;
     };
 
@@ -242,6 +258,16 @@ const Form = () => {
         return problems;
     };
 
+    // Time Exceeded is Response Time minus the threshold, by definition — there is
+    // no legitimate reason to hand-enter a different figure on a justification
+    // document. It is shown read-only and recomputed here as Response Time is
+    // typed, so what the form displays is what the deck will print.
+    const timeExceededPreview = (() => {
+        const responseSec = parseDurationToSeconds(formData.response_time);
+        if (responseSec === null) return '';
+        return formatSecondsToVerbose(responseSec - LATE_THRESHOLD_SECONDS);
+    })();
+
     const handleSubmit = async (e) => {
         e.preventDefault();
 
@@ -301,11 +327,9 @@ const Form = () => {
             processedData.actual_response_time = formatSecondsToVerbose(realResponseSec + activationSec);
         }
 
-        // C. Time Exceeded = Response Time - 8 minutes
+        // C. Time Exceeded = Response Time - the late threshold
         if (responseInputSec !== null) {
-            const eightMins = 8 * 60; // 480 sec
-            const exceededSec = responseInputSec - eightMins;
-            processedData.time_exceeded = formatSecondsToVerbose(exceededSec);
+            processedData.time_exceeded = formatSecondsToVerbose(responseInputSec - LATE_THRESHOLD_SECONDS);
         }
 
         // D. Format simple Duration Inputs to "xx Min xx Sec"
@@ -398,8 +422,7 @@ const Form = () => {
             {/* Other Metrics */}
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Metrics</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                {/* Time Exceeded calculated now, maybe read only or hidden input override? I'll leave as display/override-able if needed. */}
-                <FormInput label="Time Exceeded (Auto Calc)" name="time_exceeded" value={formData.time_exceeded} onChange={handleChange} placeholder="Calculated" />
+                <FormInput label="Time Exceeded (Auto Calc)" name="time_exceeded" value={timeExceededPreview} readOnly placeholder="From Response Time" />
                 <div style={{ marginBottom: '1.5rem' }}>
                     <label htmlFor="y_n" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>Activation within 1 minute?</label>
                     <select name="y_n" id="y_n" value={formData.y_n} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', backgroundColor: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: '1rem', outline: 'none', cursor: 'pointer' }}>
