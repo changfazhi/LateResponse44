@@ -193,15 +193,6 @@ const Form = () => {
         return diff < 0 ? diff + SECONDS_PER_DAY : diff;
     };
 
-    // Helper: Format seconds to HH:mm:ss (Time of Day)
-    const formatSecondsToTime = (totalSeconds) => {
-        if (totalSeconds < 0) totalSeconds = 0;
-        const h = Math.floor(totalSeconds / 3600);
-        const m = Math.floor((totalSeconds % 3600) / 60);
-        const s = Math.floor(totalSeconds % 60);
-        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    };
-
     // Helper: Format seconds to "xx Min xx Sec" (Verbose Duration)
     const formatSecondsToVerbose = (totalSeconds) => {
         const isNegative = totalSeconds < 0;

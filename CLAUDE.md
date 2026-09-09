@@ -33,9 +33,8 @@ npm run lint     # eslint
 There is **no test runner configured.** See "Testing without a test runner" below for how the
 logic in this repo has actually been verified.
 
-`npm run lint` currently reports 4 pre-existing errors (in `analyze_pptx.js`, which cannot run
-at all under `"type": "module"`, and an unused `formatSecondsToTime`). Don't treat a clean
-lint run as the baseline; treat 4 as the baseline until those are cleaned up.
+`npm run lint` is clean. Keep it that way — a new warning is easy to lose against a noisy
+baseline, which is how a broken script sat in the repo unnoticed.
 
 ## Architecture
 
@@ -61,9 +60,8 @@ surgery on that ZIP, not a document library:
 3. Find picture frames by regex over `<p:pic>` blocks, keeping those wider than 1 inch, and
    map uploads onto them **positionally**.
 
-`template/LR_TEMPLATE.pptx` and `img_check.zip` are byte-identical copies of
-`public/template.pptx`. Only the `public/` one is used. `temp_img_pptx/` is that same file
-extracted, committed to the repo.
+`public/template.pptx` is the only copy of the template. `analyze_pptx.cjs` is a standalone
+Node script for inspecting its picture frames; it appends to gitignored logs in the repo root.
 
 ### Template invariants worth knowing before touching image code
 
