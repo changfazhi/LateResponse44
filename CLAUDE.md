@@ -11,8 +11,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A single-page tool for SCDF vehicle commanders. When an appliance cannot reach an incident
 within 8 minutes, the commander must produce a PowerPoint justifying the delay. This app takes
-the incident data plus evidence photos and fills a 3-slide PPTX template entirely in the
-browser — no server, no upload, nothing leaves the machine.
+the incident data plus evidence photos and fills a PPTX template entirely in the browser — no
+server, no upload, nothing leaves the machine.
+
+It produces **two documents**, chosen by a toggle on the form and defined by `REPORT_MODES` in
+`pptxGenerator.js`:
+
+- **Late Response** — all three template slides, the original behaviour.
+- **Late Activation** — slide 2 alone: ACES-versus-actual activation, the ACES screenshot, and
+  the remark. Slides 1 and 3 are about the response and are pruned from the package.
 
 That framing drives most decisions here: **the output is an official document, so a wrong
 number is worse than a missing one.** Several past bugs were of the shape "produce a
@@ -55,10 +62,16 @@ surgery on that ZIP, not a document library:
 1. Fetch `${import.meta.env.BASE_URL}template.pptx` — **not** an absolute `/template.pptx`,
    which 404s under a sub-path deploy. The response is checked for the `PK` zip magic bytes
    because hosts with SPA rewrites answer unknown paths with `index.html` and a 200.
-2. For each `ppt/slides/slideN.xml`, replace `{{key}}` with the XML-escaped value for every
-   key in the processed data.
-3. Find picture frames by regex over `<p:pic>` blocks, keeping those wider than 1 inch, and
-   map uploads onto them **positionally**.
+2. Prune the slides this report type does not use (`pruneSlides`), including each dropped
+   slide's `.rels` and notes page, its `<Relationship>` in `ppt/_rels/presentation.xml.rels`,
+   its `<p:sldId>` in `ppt/presentation.xml`, and every `<Override>` in `[Content_Types].xml`.
+   A leftover part is harmless; a reference to a part that is gone makes PowerPoint call the
+   file corrupt. Media is deliberately **not** pruned — layouts and the master share it.
+3. For each surviving `ppt/slides/slideN.xml`, replace `{{key}}` with the XML-escaped value for
+   every key in the processed data.
+4. Find picture frames by regex over `<p:pic>` blocks, keeping those wider than 1 inch, and map
+   uploads onto them **positionally within each slide** — `SLIDE_UPLOAD_SLOTS` is keyed by
+   slide, so dropping a slide cannot shift the remaining uploads into the wrong frames.
 
 `public/template.pptx` is the only copy of the template. `analyze_pptx.cjs` is a standalone
 Node script for inspecting its picture frames; it appends to gitignored logs in the repo root.
@@ -67,11 +80,11 @@ Node script for inspecting its picture frames; it appends to gitignored logs in 
 
 Verified against the current template — re-verify if the template is ever replaced:
 
-- Exactly **10** picture frames match the `width > 1 inch` filter, in the order the
-  `UPLOAD_SLOTS` array expects. The smallest real target is 1.57 in and the largest decoy icon
-  is 0.36 in, so the threshold has margin — but nothing asserts the count, and a template
-  resize that pushes a sequence image under 1 inch would silently shift every later upload
-  into the wrong frame.
+- Exactly **10** picture frames match the `width > 1 inch` filter — 1 on slide 1, 1 on slide 2,
+  8 on slide 3 — in the order `SLIDE_UPLOAD_SLOTS` expects. The smallest real target is 1.57 in
+  and the largest decoy icon is 0.36 in, so the threshold has margin — but nothing asserts the
+  count, and a template resize that pushes a sequence image under 1 inch would still shift every
+  later upload *on that slide* into the wrong frame.
 - `<p:pic>` document order is z-order, not visual position. Re-adding a picture in PowerPoint
   moves it to the end of the XML and silently reorders the slots.
 - **Media parts are shared.** Slide 3's `rId3` is referenced by six `<p:pic>` elements. This is
@@ -104,7 +117,16 @@ Conventions that exist for a reason:
 
 ### Validation split
 
-`findBlockingProblems()` **blocks** generation on things that are unambiguously wrong: a value
+`findBlockingProblems(data, mode)` only ever considers the fields the chosen report type
+actually prints, so late response's pair rules — which is what used to make a late activation
+report impossible to generate — do not apply to late activation.
+
+Late activation adds one blocking rule of its own. Slide 2 carries fixed wording the form
+cannot rewrite: *"According to ACES logs, `<appliance>` responded within 1 Min."* An Actual
+Activation of 60 seconds or more makes the slide contradict its own table, so it is refused
+rather than printed.
+
+Otherwise it **blocks** generation on things that are unambiguously wrong: a value
 that was typed but cannot be parsed, and a half-filled pair that makes a calculation
 impossible. Fields merely left blank are **not** blocking — a partial draft is legitimate —
 and are instead listed in an amber warning after the download, alongside the count of missing
