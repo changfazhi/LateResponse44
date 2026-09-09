@@ -1,11 +1,87 @@
 import React, { useState } from 'react';
 import FormInput from './FormInput';
-import { generatePPTX } from '../utils/pptxGenerator';
+import { generatePPTX, UPLOAD_SLOTS } from '../utils/pptxGenerator';
+
+// Clock-time and duration fields, paired with the label shown on the form so a
+// validation message points at the box the user has to go and fix.
+const TIME_FIELDS = [
+    ['time', 'Incident Time'],
+    ['arrival_time', 'Arrival Time'],
+    ['move_off', 'Move Off Time'],
+    ['SFTL1_redTime', 'SFTL1 Red Time'],
+    ['SFTL1_greenTime', 'SFTL1 Green Time'],
+    ['SFTL2_redTime', 'SFTL2 Red Time'],
+    ['SFTL2_greenTime', 'SFTL2 Green Time'],
+    ['SFTL3_redTime', 'SFTL3 Red Time'],
+    ['SFTL3_greenTime', 'SFTL3 Green Time'],
+];
+
+const DURATION_FIELDS = [
+    ['activation_time', 'Activation Time'],
+    ['actual_activation_time', 'Actual Activation'],
+    ['response_time', 'Response Time (Input)'],
+];
+
+// Every placeholder the template actually prints, so we can tell the user which
+// ones will come out blank instead of letting them find out in the deck.
+const REPORT_FIELDS = [
+    ['incident_number', 'Incident Number'],
+    ['date', 'Date'],
+    ['time', 'Incident Time'],
+    ['arrival_time', 'Arrival Time'],
+    ['move_off', 'Move Off Time'],
+    ['response_time', 'Response Time'],
+    ['real_response_time', 'Real Response Time'],
+    ['actual_response_time', 'Actual Response Time'],
+    ['activation_time', 'Activation Time'],
+    ['actual_activation_time', 'Actual Activation'],
+    ['time_exceeded', 'Time Exceeded'],
+    ['y_n', 'Activation within 1 minute'],
+    ['incident_type', 'Incident Type'],
+    ['location', 'Location'],
+    ['appliance_data', 'Appliance Data'],
+    ['response_zone', 'Response Zone'],
+    ['number_of_sftl', 'Number of SFTL'],
+    ['sc', 'SC'],
+    ['po', 'PO'],
+    ['sftl1', 'SFTL1 Location'],
+    ['SFTL1_redTime', 'SFTL1 Red Time'],
+    ['SFTL1_greenTime', 'SFTL1 Green Time'],
+    ['SFTL1_duration', 'SFTL1 Duration'],
+    ['sftl2', 'SFTL2 Location'],
+    ['SFTL2_redTime', 'SFTL2 Red Time'],
+    ['SFTL2_greenTime', 'SFTL2 Green Time'],
+    ['SFTL2_duration', 'SFTL2 Duration'],
+    ['sftl3', 'SFTL3 Location'],
+    ['SFTL3_redTime', 'SFTL3 Red Time'],
+    ['SFTL3_greenTime', 'SFTL3 Green Time'],
+    ['SFTL3_duration', 'SFTL3 Duration'],
+];
+
+// SCDF treats a response as late beyond 8 minutes; Time Exceeded is measured
+// against that threshold. It is the one policy number in the app, so it lives
+// here rather than inline in a calculation.
+const LATE_THRESHOLD_SECONDS = 8 * 60;
+
+// toISOString() reports the UTC date, which is the previous day for the whole
+// 00:00-08:00 local window here — disproportionately the hours this tool is
+// used for. Build the default from local calendar fields instead.
+const todayLocalISO = () => {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+};
+
+const STATUS_STYLES = {
+    error: { bg: 'rgba(239, 68, 68, 0.2)', fg: '#fca5a5', border: 'rgba(239, 68, 68, 0.5)' },
+    warning: { bg: 'rgba(245, 158, 11, 0.2)', fg: '#fcd34d', border: 'rgba(245, 158, 11, 0.5)' },
+    success: { bg: 'rgba(34, 197, 94, 0.2)', fg: '#86efac', border: 'rgba(34, 197, 94, 0.5)' },
+};
 
 const Form = () => {
     const [formData, setFormData] = useState({
         incident_number: '',
-        date: new Date().toISOString().split('T')[0],
+        date: todayLocalISO(),
         time: '',
         arrival_time: '',
         response_time: '',
@@ -64,30 +140,57 @@ const Form = () => {
         const { name, files } = e.target;
         if (files && files[0]) {
             setImages(prev => ({ ...prev, [name]: files[0] }));
+            if (status) setStatus(null);
         }
+    };
+
+    const SECONDS_PER_DAY = 24 * 3600;
+
+    // Split "HH:mm[:ss]" into numeric parts, or null if a part is empty or not a
+    // number. Returning null rather than NaN is what lets the callers below tell
+    // "no value given" apart from "a value we can safely calculate with" — every
+    // guard down there is a !== null check, and NaN passes those.
+    const splitTimeParts = (str, maxParts) => {
+        const parts = str.split(':');
+        if (parts.length < 2 || parts.length > maxParts) return null;
+        if (parts.some(part => part.trim() === '')) return null;
+        const nums = parts.map(Number);
+        if (nums.some(n => !Number.isFinite(n))) return null;
+        return nums;
     };
 
     // Helper: Parse HH:mm:ss to seconds from start of day
     const parseTimeToSeconds = (timeStr) => {
         if (!timeStr) return null;
-        const parts = timeStr.split(':').map(Number);
-        if (parts.length < 2) return null;
-        let seconds = 0;
-        if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-        else if (parts.length === 2) seconds = parts[0] * 3600 + parts[1] * 60;
-        return seconds;
+        const parts = splitTimeParts(timeStr.trim(), 3);
+        if (!parts) return null;
+        if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        return parts[0] * 3600 + parts[1] * 60;
     };
 
     // Helper: Parse Duration to seconds. Supports MM:SS or plain minutes.
     const parseDurationToSeconds = (durStr) => {
         if (!durStr) return null;
-        if (durStr.includes(':')) {
-            const parts = durStr.split(':').map(Number);
+        const str = durStr.trim();
+        if (!str) return null;
+        if (str.includes(':')) {
+            const parts = splitTimeParts(str, 3);
+            if (!parts) return null;
             if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-            if (parts.length === 2) return parts[0] * 60 + parts[1];
+            return parts[0] * 60 + parts[1];
         }
-        if (!isNaN(durStr)) return Number(durStr) * 60;
+        // A bare number is ambiguous: someone writing "90" for 90 seconds would
+        // silently get 90 minutes. The form asks for MM:SS, so require it and let
+        // validation say so rather than guessing at a 10x error.
         return null;
+    };
+
+    // Elapsed time between two clock times, wrapping over midnight so an incident
+    // that moves off at 23:58 and arrives at 00:05 reads as 7 minutes rather than
+    // as a negative duration.
+    const elapsedBetween = (fromSec, toSec) => {
+        const diff = toSec - fromSec;
+        return diff < 0 ? diff + SECONDS_PER_DAY : diff;
     };
 
     // Helper: Format seconds to HH:mm:ss (Time of Day)
@@ -117,8 +220,63 @@ const Form = () => {
         return timeStr;
     };
 
+    // Refuse to build a report we know would be wrong. Two things are blocking:
+    // a value that was typed but cannot be parsed, and a half-filled pair that
+    // leaves a calculation impossible. Everything merely left blank is reported
+    // afterwards as a warning, since a partial draft is a legitimate thing to want.
+    const findBlockingProblems = (data) => {
+        const problems = [];
+
+        for (const [key, label] of TIME_FIELDS) {
+            if (data[key] && parseTimeToSeconds(data[key]) === null) {
+                problems.push(`${label}: "${data[key]}" is not a valid time. Use HH:mm or HH:mm:ss.`);
+            }
+        }
+
+        for (const [key, label] of DURATION_FIELDS) {
+            if (data[key] && parseDurationToSeconds(data[key]) === null) {
+                problems.push(`${label}: "${data[key]}" is not a valid duration. Use MM:SS, for example 05:30.`);
+            }
+        }
+
+        const filled = (key) => Boolean(data[key]);
+
+        if (filled('arrival_time') !== filled('move_off')) {
+            problems.push('Real Response Time needs both Move Off Time and Arrival Time. Fill in the missing one.');
+        }
+
+        if (filled('activation_time') && !(filled('arrival_time') && filled('move_off'))) {
+            problems.push('Actual Response Time is Activation Time plus travel time, so it also needs Move Off Time and Arrival Time.');
+        }
+
+        for (const n of [1, 2, 3]) {
+            if (filled(`SFTL${n}_redTime`) !== filled(`SFTL${n}_greenTime`)) {
+                problems.push(`SFTL${n} Duration needs both SFTL${n} Red Time and SFTL${n} Green Time. Fill in the missing one.`);
+            }
+        }
+
+        return problems;
+    };
+
+    // Time Exceeded is Response Time minus the threshold, by definition — there is
+    // no legitimate reason to hand-enter a different figure on a justification
+    // document. It is shown read-only and recomputed here as Response Time is
+    // typed, so what the form displays is what the deck will print.
+    const timeExceededPreview = (() => {
+        const responseSec = parseDurationToSeconds(formData.response_time);
+        if (responseSec === null) return '';
+        return formatSecondsToVerbose(responseSec - LATE_THRESHOLD_SECONDS);
+    })();
+
     const handleSubmit = async (e) => {
         e.preventDefault();
+
+        const problems = findBlockingProblems(formData);
+        if (problems.length > 0) {
+            setStatus({ type: 'error', message: 'The report was not generated. Fix these first:', details: problems });
+            return;
+        }
+
         setIsLoading(true);
         setStatus(null);
 
@@ -153,27 +311,25 @@ const Form = () => {
 
 
         // A. Real Response Time = Arrival - Move Off
-        let realResponseSec = 0;
+        let realResponseSec = null;
         if (arrivalSec !== null && moveOffSec !== null) {
-            realResponseSec = arrivalSec - moveOffSec;
+            realResponseSec = elapsedBetween(moveOffSec, arrivalSec);
             processedData.real_response_time = formatSecondsToVerbose(realResponseSec);
             // Backward compat
             processedData.rresponse_time = processedData.real_response_time;
         }
 
         // B. Actual Response Time = Activation + Real Response
-        if (activationSec !== null) {
-            // Note: Use calculated realResponseSec (even if 0/failed? assume inputs exist)
-            // If realResponseSec dependent on missing inputs, result might be weird. we handle minimal check:
-            const actualTotal = realResponseSec + activationSec;
-            processedData.actual_response_time = formatSecondsToVerbose(actualTotal);
+        // Both halves are required. Without a Move Off / Arrival pair there is no
+        // travel time, and adding activation to an assumed zero would understate
+        // the response on the very document meant to justify it. Leave it blank.
+        if (activationSec !== null && realResponseSec !== null) {
+            processedData.actual_response_time = formatSecondsToVerbose(realResponseSec + activationSec);
         }
 
-        // C. Time Exceeded = Response Time - 8 minutes
+        // C. Time Exceeded = Response Time - the late threshold
         if (responseInputSec !== null) {
-            const eightMins = 8 * 60; // 480 sec
-            const exceededSec = responseInputSec - eightMins;
-            processedData.time_exceeded = formatSecondsToVerbose(exceededSec);
+            processedData.time_exceeded = formatSecondsToVerbose(responseInputSec - LATE_THRESHOLD_SECONDS);
         }
 
         // D. Format simple Duration Inputs to "xx Min xx Sec"
@@ -186,28 +342,42 @@ const Form = () => {
         const sftl1RedSec = parseTimeToSeconds(processedData.SFTL1_redTime);
         const sftl1GreenSec = parseTimeToSeconds(processedData.SFTL1_greenTime);
         if (sftl1RedSec !== null && sftl1GreenSec !== null) {
-            processedData.SFTL1_duration = formatSecondsToVerbose(sftl1GreenSec - sftl1RedSec);
+            processedData.SFTL1_duration = formatSecondsToVerbose(elapsedBetween(sftl1RedSec, sftl1GreenSec));
         }
 
         const sftl2RedSec = parseTimeToSeconds(processedData.SFTL2_redTime);
         const sftl2GreenSec = parseTimeToSeconds(processedData.SFTL2_greenTime);
         if (sftl2RedSec !== null && sftl2GreenSec !== null) {
-            processedData.SFTL2_duration = formatSecondsToVerbose(sftl2GreenSec - sftl2RedSec);
+            processedData.SFTL2_duration = formatSecondsToVerbose(elapsedBetween(sftl2RedSec, sftl2GreenSec));
         }
 
         const sftl3RedSec = parseTimeToSeconds(processedData.SFTL3_redTime);
         const sftl3GreenSec = parseTimeToSeconds(processedData.SFTL3_greenTime);
         if (sftl3RedSec !== null && sftl3GreenSec !== null) {
-            processedData.SFTL3_duration = formatSecondsToVerbose(sftl3GreenSec - sftl3RedSec);
+            processedData.SFTL3_duration = formatSecondsToVerbose(elapsedBetween(sftl3RedSec, sftl3GreenSec));
         }
 
 
         try {
             await generatePPTX(processedData, images);
-            setStatus({ type: 'success', message: 'Presentation generated successfully!' });
+
+            const blankFields = REPORT_FIELDS.filter(([key]) => !processedData[key]).map(([, label]) => label);
+            const missingImages = UPLOAD_SLOTS.filter(slot => !images[slot.key]).map(slot => slot.label);
+
+            const details = [];
+            if (blankFields.length > 0) {
+                details.push(`${blankFields.length} field${blankFields.length === 1 ? '' : 's'} printed blank: ${blankFields.join(', ')}.`);
+            }
+            if (missingImages.length > 0) {
+                details.push(`${missingImages.length} of ${UPLOAD_SLOTS.length} evidence images not uploaded, so the template's placeholder graphics remain: ${missingImages.join(', ')}.`);
+            }
+
+            setStatus(details.length > 0
+                ? { type: 'warning', message: 'Presentation downloaded, but it is incomplete:', details }
+                : { type: 'success', message: 'Presentation generated successfully!' });
         } catch (error) {
             console.error(error);
-            setStatus({ type: 'error', message: 'Failed to generate presentation. Please try again.' });
+            setStatus({ type: 'error', message: error?.message || 'Failed to generate presentation. Please try again.' });
         } finally {
             setIsLoading(false);
         }
@@ -252,8 +422,7 @@ const Form = () => {
             {/* Other Metrics */}
             <h3 style={{ marginBottom: '1rem', marginTop: '1.5rem', color: 'var(--accent-primary)' }}>Metrics</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                {/* Time Exceeded calculated now, maybe read only or hidden input override? I'll leave as display/override-able if needed. */}
-                <FormInput label="Time Exceeded (Auto Calc)" name="time_exceeded" value={formData.time_exceeded} onChange={handleChange} placeholder="Calculated" />
+                <FormInput label="Time Exceeded (Auto Calc)" name="time_exceeded" value={timeExceededPreview} readOnly placeholder="From Response Time" />
                 <div style={{ marginBottom: '1.5rem' }}>
                     <label htmlFor="y_n" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: '500' }}>Activation within 1 minute?</label>
                     <select name="y_n" id="y_n" value={formData.y_n} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', backgroundColor: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: '1rem', outline: 'none', cursor: 'pointer' }}>
@@ -375,11 +544,18 @@ const Form = () => {
                     borderRadius: 'var(--radius-md)',
                     textAlign: 'center',
                     marginBottom: '1.5rem',
-                    backgroundColor: status.type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)',
-                    color: status.type === 'error' ? '#fca5a5' : '#86efac',
-                    border: `1px solid ${status.type === 'error' ? 'rgba(239, 68, 68, 0.5)' : 'rgba(34, 197, 94, 0.5)'}`
+                    backgroundColor: (STATUS_STYLES[status.type] || STATUS_STYLES.success).bg,
+                    color: (STATUS_STYLES[status.type] || STATUS_STYLES.success).fg,
+                    border: `1px solid ${(STATUS_STYLES[status.type] || STATUS_STYLES.success).border}`
                 }}>
                     {status.message}
+                    {status.details && status.details.length > 0 && (
+                        <ul style={{ textAlign: 'left', margin: '0.75rem 0 0', paddingLeft: '1.25rem' }}>
+                            {status.details.map((detail, i) => (
+                                <li key={i} style={{ marginBottom: '0.35rem' }}>{detail}</li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
             )}
 

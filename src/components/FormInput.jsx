@@ -1,6 +1,6 @@
 import React from 'react';
 
-const FormInput = ({ label, name, type = 'text', value, onChange, required = false, placeholder = '', ...props }) => {
+const FormInput = ({ label, name, type = 'text', value, onChange, required = false, placeholder = '', readOnly = false, ...props }) => {
     return (
         <div style={{ marginBottom: '1.5rem' }}>
             <label
@@ -23,22 +23,26 @@ const FormInput = ({ label, name, type = 'text', value, onChange, required = fal
                 onChange={onChange}
                 required={required}
                 placeholder={placeholder}
+                readOnly={readOnly}
                 style={{
                     width: '100%',
                     padding: '0.75rem 1rem',
-                    backgroundColor: 'var(--input-bg)',
+                    backgroundColor: readOnly ? 'var(--card-bg)' : 'var(--input-bg)',
                     border: '1px solid var(--border-color)',
                     borderRadius: 'var(--radius-md)',
-                    color: 'var(--text-primary)',
+                    color: readOnly ? 'var(--text-secondary)' : 'var(--text-primary)',
                     fontSize: '1rem',
                     outline: 'none',
                     transition: 'all 0.2s ease',
+                    cursor: readOnly ? 'default' : 'text',
                 }}
                 onFocus={(e) => {
+                    if (readOnly) return;
                     e.target.style.borderColor = 'var(--accent-primary)';
                     e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.2)';
                 }}
                 onBlur={(e) => {
+                    if (readOnly) return;
                     e.target.style.borderColor = 'var(--border-color)';
                     e.target.style.boxShadow = 'none';
                 }}
