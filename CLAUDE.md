@@ -12,7 +12,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A single-page tool for SCDF vehicle commanders. When an appliance cannot reach an incident
 within 8 minutes, the commander must produce a PowerPoint justifying the delay. This app takes
 the incident data plus evidence photos and fills a PPTX template entirely in the browser — no
-server, no upload, nothing leaves the machine.
+server, no upload.
+
+**Network boundary.** There is still no backend. One thing crosses the network, and only when
+the operator chooses it: the **text** pasted into "Fill from incident notes" is sent to
+Google's Gemini API to be read, using an API key the operator supplies and which is kept in
+their own browser's `localStorage`. Evidence images, the template, and PPTX generation remain
+entirely local. Extraction is optional and the form is fully usable without it.
 
 It produces **two documents**, chosen by a toggle on the form and defined by `REPORT_MODES` in
 `pptxGenerator.js`:
@@ -37,22 +43,63 @@ npm run build    # production build to dist/
 npm run lint     # eslint
 ```
 
-There is **no test runner configured.** See "Testing without a test runner" below for how the
-logic in this repo has actually been verified.
+```bash
+npm test         # vitest, one-shot
+npm run test:watch
+```
+
+`npm test` covers the shared domain logic and the extraction validator. See "Testing" below
+for what is and is not covered.
 
 `npm run lint` is clean. Keep it that way — a new warning is easy to lose against a noisy
 baseline, which is how a broken script sat in the repo unnoticed.
 
 ## Architecture
 
-Three files carry the whole app:
-
-- **`src/components/Form.jsx`** — all form state, all time arithmetic, all validation. The
-  single source of truth for what the report says.
+- **`src/domain/time.js`** — clock/duration parsing, formatting, and the normalizers that turn
+  loosely written note text into canonical values. Pure, dependency-free, unit-tested.
+- **`src/domain/reportFields.js`** — which fields exist, which report type prints which, what
+  type each holds, and which ones only the app may produce (`DERIVED_FIELDS`). The extraction
+  allowlist is *derived* from this list rather than written out again.
+- **`src/components/Form.jsx`** — form state and orchestration. Still the single source of
+  truth for what the report says, but the time arithmetic now lives in `src/domain/`.
 - **`src/utils/pptxGenerator.js`** — takes the processed data and the raw `File` objects,
   rewrites the template's XML, and triggers the download.
-- **`src/components/FormInput.jsx`** — presentational input, supports a `readOnly` visual
-  state for derived fields.
+- **`src/components/FormInput.jsx`** — presentational input; supports a `readOnly` visual
+  state for derived fields and a `fromNotes` provenance badge.
+- **`src/features/extraction/`** — the Gemini note-extraction feature. See below.
+
+### Note extraction
+
+Optional, off unless the operator opens the panel and supplies a key. The safety rule for the
+whole feature: **the model proposes, the human applies.**
+
+- `apiKey.js` — key resolution, in priority order: a key pasted into the panel
+  (`localStorage`), then `VITE_GEMINI_API_KEY` from `.env.local`. The env fallback is guarded
+  by `import.meta.env.DEV`, which is replaced with a literal `false` at build time, so the
+  branch is dead code in a production bundle and the key cannot ship. **This app deploys as
+  static files — a key inlined into the bundle is a key published to every visitor.** If you
+  change this file, re-verify with: put a sentinel in `.env.local`, `npm run build`, and grep
+  `dist/` for it.
+- `geminiClient.js` — one non-streaming `generateContent` call to a pinned model with a
+  per-mode `responseSchema`. The schema's `field` enum is generated from
+  `extractableFieldsFor(mode)`, so a derived field cannot even be named in a valid response.
+  The key travels in the `x-goog-api-key` header, never the URL. The note goes in the user
+  turn between delimiters, never in the system instruction.
+- `validateProposals.js` — treats the response as untrusted. Five checks: shape, mode
+  allowlist, **grounding** (the quoted evidence must appear literally in the submitted note,
+  and the value must appear inside its own evidence), normalization through the same
+  `src/domain/time.js` parsers manual entry uses, and conflict detection. Anything that fails
+  is demoted to `rejected`/`conflicting` and shown but made non-selectable — the batch is
+  never thrown away for one bad row.
+- `ReviewPanel.jsx` — current → proposed, with evidence. Blanks pre-ticked; overwrites
+  unticked and warned; values already matching the form marked "already in the form" and not
+  offered, so an overwrite warning always means something.
+- Applying only fills inputs. It never calls `handleSubmit` or `generatePPTX`, and the
+  existing `findBlockingProblems` still runs on the merged data.
+
+Adding a field to extraction means adding it to `FIELD_TYPE` in `reportFields.js` — nothing
+else. Leaving it out of `FIELD_TYPE` is how a field stays manual.
 
 ### How the PPTX is actually produced
 
@@ -132,17 +179,23 @@ impossible. Fields merely left blank are **not** blocking — a partial draft is
 and are instead listed in an amber warning after the download, alongside the count of missing
 evidence images.
 
-## Testing without a test runner
+## Testing
 
-Logic here has been verified by **extracting the shipped functions from the source and running
-them in Node**, rather than retyping them into a test — a Python snippet slices between known
-anchors in `Form.jsx`, writes an `.mjs`, and runs assertions against it. This keeps the tests
-honest about what actually ships. For `pptxGenerator.js`, the module is copied alongside a
-stub `file-saver` and a `fetch` mock, then run against the real `public/template.pptx` and the
-output ZIP inspected.
+`npm test` runs Vitest over the two things that must not be wrong:
 
-If you add a real test runner, that's an improvement — but until then, don't claim logic is
-verified without having actually executed it this way.
+- `src/domain/time.test.js` — parsing and normalization, including the component ranges.
+- `src/features/extraction/validateProposals.test.js` — the untrusted-input path: fabricated
+  evidence, derived-field attempts, out-of-mode fields, conflicts, unparseable values.
+
+These import the shipped modules directly. The old technique of slicing functions out of
+`Form.jsx` with a Python snippet is gone along with the reason for it — that logic now lives
+in importable `src/domain/` modules.
+
+**Still not covered by an automated test:** `pptxGenerator.js` and the real template. The
+invariants in the section above are verified by hand. For that, the established technique is
+to copy the module alongside a stub `file-saver` and a `fetch` mock, run it against the real
+`public/template.pptx`, and inspect the output ZIP. Don't claim the generator is verified
+without having actually executed it that way.
 
 ## Deployment note
 
