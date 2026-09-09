@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Debug artifacts from analyze_pptx.cjs
+slide3_log.txt
+large_images_log.txt
+
+# Scratch copies of the template, extracted for inspection
+temp_img_pptx/
+*.pptx.zip
